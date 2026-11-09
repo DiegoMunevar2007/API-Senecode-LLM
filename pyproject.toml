@@ -1,0 +1,26 @@
+[project]
+name = "api-senecode-llm"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "DiegoMunevar2007", email = "d.munevar@uniandes.edu.co" }
+]
+requires-python = ">=3.13"
+dependencies = [
+    "fastapi>=0.115",
+    "pydantic-settings>=2.6",
+    "tortoise-orm[asyncpg,asyncmy]>=1.0",
+    "uvicorn[standard]>=0.32",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+    "pytest-asyncio>=0.24",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+pythonpath = ["."]
