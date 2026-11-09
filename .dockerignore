@@ -1,0 +1,10 @@
+.git
+.venv
+.pytest_cache
+__pycache__
+*.py[oc]
+.env
+agente-nodos
+tests
+Prompts.md
+CONTRATO_API.md

@@ -58,7 +58,13 @@ async def run() -> None:
     try:
         for data in MODELOS:
             defaults = {k: v for k, v in data.items() if k != "modelo_id"}
-            await Modelo.update_or_create(modelo_id=data["modelo_id"], defaults=defaults)
+            modelo, created = await Modelo.get_or_create(
+                modelo_id=data["modelo_id"], defaults=defaults
+            )
+            if not created:
+                # No re-habilitar en cada arranque: `enabled` se controla desde la BD.
+                defaults.pop("enabled", None)
+                await Modelo.filter(modelo_id=modelo.modelo_id).update(**defaults)
         print("modelos:", ", ".join(m["modelo_id"] for m in MODELOS))
     finally:
         await Tortoise.close_connections()
