@@ -3,11 +3,12 @@ import hmac
 import logging
 from contextlib import asynccontextmanager, suppress
 from datetime import datetime, timezone
-from typing import Annotated, Literal
+from typing import Literal
 from urllib.parse import quote
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Request, Response
+from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.responses import RedirectResponse
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, ConfigDict
 from tortoise.contrib.fastapi import RegisterTortoise
 from tortoise.functions import Count
@@ -132,10 +133,23 @@ class StatsResponse(BaseModel):
     nodos: list[NodoStats]
 
 
-async def auth(authorization: Annotated[str | None, Header()] = None) -> None:
-    expected = f"Bearer {settings.api_token}"
-    if not settings.api_token or not authorization or not hmac.compare_digest(authorization, expected):
-        raise HTTPException(status_code=401, detail="unauthorized")
+bearer = HTTPBearer(auto_error=False)
+
+
+async def auth(
+    credentials: HTTPAuthorizationCredentials | None = Depends(bearer),
+) -> None:
+    if (
+        not settings.api_token
+        or credentials is None
+        or credentials.scheme.lower() != "bearer"
+        or not hmac.compare_digest(credentials.credentials, settings.api_token)
+    ):
+        raise HTTPException(
+            status_code=401,
+            detail="unauthorized",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
 
 
 async def _poll(app: FastAPI) -> None:
