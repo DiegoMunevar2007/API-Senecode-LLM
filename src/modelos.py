@@ -38,7 +38,7 @@ async def _nodos_por_modelo() -> dict[str, int]:
 
 
 async def elegir_modelo(node_id: str, loaded: dict | None = None) -> Modelo | None:
-    """Pin > modelo cargado con trabajo > modelo con trabajo y menos nodos."""
+    """Pin > modelo cargado con trabajo > lote por creación o menos nodos."""
     pin = await NodoModelo.filter(node_id=node_id).first()
     if pin:
         modelo = await Modelo.filter(modelo_id=pin.modelo_id, enabled=True).first()
@@ -57,6 +57,18 @@ async def elegir_modelo(node_id: str, loaded: dict | None = None) -> Modelo | No
 
     if cargado and await tiene_trabajo(cargado.modelo_id):
         return cargado
+
+    if settings.batch_por_modelo:
+        # Lote: todos los nodos al primer modelo con trabajo, en orden de creación.
+        for modelo in await Modelo.filter(enabled=True).order_by("created_at", "modelo_id"):
+            if await tiene_trabajo(modelo.modelo_id):
+                return modelo
+        if settings.mantener_modelo_sin_trabajo:
+            if cargado:
+                return cargado
+            modelos = await Modelo.filter(enabled=True).order_by("created_at", "modelo_id")
+            return modelos[0] if modelos else None
+        return None
 
     candidatos = [
         modelo for modelo in await _habilitados()

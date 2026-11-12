@@ -18,6 +18,7 @@ class Settings(BaseSettings):
     heartbeat_interval_s: int = 10
     heartbeat_timeout_s: int = 60
     auto_reasignar: bool = True
+    batch_por_modelo: bool = True
     mantener_modelo_sin_trabajo: bool = False
     sync_enabled: bool = False
     sync_interval_s: int = 30

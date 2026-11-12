@@ -74,15 +74,25 @@ Con `AUTO_REASIGNAR=true` (default), en cada heartbeat el master:
 
 1. Respeta un pin de `nodo_modelo` (pin duro, aunque el modelo esté sin trabajo).
 2. Mantiene el modelo que el nodo ya tiene cargado si quedan tareas `pending` o `processing`.
-3. Si no, asigna un modelo con trabajo, eligiendo el que tenga **menos nodos activos** (`nodo_estado`, últimos `HEARTBEAT_TIMEOUT_S` segundos). En empate reparte por un hash estable del `node_id`.
+3. Si no, elige el siguiente modelo con trabajo:
+   - `BATCH_POR_MODELO=true` (default): el primero habilitado con trabajo en orden de
+     creación (`modelo.created_at`). Los nodos ociosos van a ese lote y se quedan ahí
+     hasta vaciarlo; luego pasan al siguiente.
+   - `BATCH_POR_MODELO=false`: reparte entre los modelos con trabajo, eligiendo el de
+     menos nodos activos (`nodo_estado`, últimos `HEARTBEAT_TIMEOUT_S` segundos).
 4. Si ningún modelo tiene trabajo, devuelve `desired_model: null` y el agente libera la GPU.
 
-No hay prioridad entre modelos: los que tienen trabajo se procesan en paralelo y el
-master reparte los nodos entre ellos. El cambio se dispara cuando el modelo se
-queda sin `pending`/`processing`: el agente drena lo que tenga en vuelo,
-descarga/carga el nuevo modelo y empieza a pedir tareas de ese `model_id`. No se
-reenvían tareas terminadas; las `dead` no cuentan como trabajo.
+No hay prioridad: en modo lote todos los modelos se procesan, solo en orden de creación.
+La tabla `calificacion` ya está filtrada por `modelo` y tiene el índice parcial por
+`(modelo, envio_id)`, así que no hace falta reordenarla físicamente. El modo lote
+minimiza las recargas de modelo: cada nodo carga cada modelo una vez, no salta entre
+ellos según el balanceo. El cambio se dispara cuando el modelo se queda sin
+`pending`/`processing`: el agente drena lo que tenga en vuelo, descarga/carga el
+nuevo modelo y empieza a pedir tareas de ese `model_id`. No se reenvían tareas
+terminadas; las `dead` no cuentan como trabajo.
 
+- `BATCH_POR_MODELO=true`: procesa modelo por modelo (recomendado para no recargar).
+- `BATCH_POR_MODELO=false`: procesa modelos en paralelo entre los nodos.
 - `MANTENER_MODELO_SIN_TRABAJO=true` evita descargar el modelo cuando no hay trabajo.
 - `AUTO_REASIGNAR=false` vuelve al modo manual (pin, modelo cargado o default).
 - `HEARTBEAT_TIMEOUT_S=60`: un nodo sin heartbeat en ese tiempo no cuenta para el reparto.
