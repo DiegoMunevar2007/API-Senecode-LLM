@@ -3,12 +3,12 @@ import hmac
 import logging
 from contextlib import asynccontextmanager, suppress
 from datetime import datetime, timezone
-from typing import Literal
+from typing import Annotated, Literal
 
-from fastapi import Depends, FastAPI, HTTPException, Request, Response
+from fastapi import Depends, FastAPI, HTTPException, Path, Request, Response
 from fastapi.responses import RedirectResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 from tortoise.contrib.fastapi import RegisterTortoise
 from tortoise.functions import Count
 
@@ -30,109 +30,112 @@ logger = logging.getLogger(__name__)
 
 
 class TaskRequest(BaseModel):
-    node_id: str
-    model_id: str
+    node_id: str = Field(description="Identificador único del nodo (hostname del PC).")
+    model_id: str = Field(description="Modelo que el nodo tiene cargado, tal como lo devolvió el heartbeat.")
 
 
 class TaskParams(BaseModel):
-    temperature: float = 0
-    seed: int = 42
-    max_tokens: int = 2048
+    temperature: float = Field(default=0, description="Temperatura de muestreo. 0 para respuestas deterministas.")
+    seed: int = Field(default=42, description="Semilla para reproducibilidad.")
+    max_tokens: int = Field(default=2048, ge=1, description="Máximo de tokens de salida del modelo.")
 
 
 class TaskResponse(BaseModel):
-    task_id: str
-    model_id: str
-    messages: list[Message]
-    params: TaskParams
-    response_schema: dict
-    lease_seconds: int
+    task_id: str = Field(description="Identificador de la tarea con formato envio:metrica:modelo.")
+    model_id: str = Field(description="Modelo con el que debe calificarse la tarea.")
+    messages: list[Message] = Field(description="Mensajes en formato chat de OpenAI para el agente.")
+    params: TaskParams = Field(description="Parámetros de muestreo para llamafile/llama.cpp.")
+    response_schema: dict = Field(description="JSON Schema que el agente usa para forzar y validar la salida.")
+    lease_seconds: int = Field(description="Segundos de lease; si el master no recibe el resultado, la tarea vuelve a la cola.")
 
 
 class ModelInfo(BaseModel):
-    id: str
-    sha256: str | None = None
+    id: str = Field(description="Identificador del modelo que generó la respuesta.")
+    sha256: str | None = Field(default=None, description="SHA-256 del archivo del modelo, si el agente lo conoce.")
 
 
 class ResultRequest(BaseModel):
-    node_id: str
-    status: Literal["ok", "error"]
-    output: dict | None = None
-    raw_text: str | None = None
-    error: str | None = None
-    attempts: int = 1
-    usage: dict | None = None
-    model: ModelInfo | None = None
-    started_at: datetime | None = None
-    finished_at: datetime | None = None
-    duration_s: float | None = None
+    node_id: str = Field(description="Nodo que entrega el resultado.")
+    status: Literal["ok", "error"] = Field(description="ok si la calificación fue válida; error si falló la inferencia o el JSON.")
+    output: dict | None = Field(default=None, description="JSON validado contra response_schema. Obligatorio cuando status=ok.")
+    raw_text: str | None = Field(default=None, description="Texto crudo del modelo, útil para diagnóstico.")
+    error: str | None = Field(default=None, description="Descripción del error cuando status=error.")
+    attempts: int = Field(default=1, ge=0, description="Intentos de inferencia que hizo el agente.")
+    usage: dict | None = Field(default=None, description="Conteo de tokens devuelto por el servidor de inferencia.")
+    model: ModelInfo | None = Field(default=None, description="Modelo utilizado por el agente.")
+    started_at: datetime | None = Field(default=None, description="Inicio de la inferencia en ISO 8601 UTC.")
+    finished_at: datetime | None = Field(default=None, description="Fin de la inferencia en ISO 8601 UTC.")
+    duration_s: float | None = Field(default=None, ge=0, description="Duración de la inferencia en segundos.")
 
 
 class ResultResponse(BaseModel):
-    accepted: bool
-    duplicate: bool
+    accepted: bool = Field(description="True si el resultado fue aceptado o ya existía.")
+    duplicate: bool = Field(description="True si ya había un resultado ok para esa tarea y modelo.")
 
 
 class HealthResponse(BaseModel):
-    status: str
-    postgres: bool
-    mysql: bool
+    status: str = Field(description="ok si Postgres responde; degraded si no.")
+    postgres: bool = Field(description="Conexión con la base nueva (cola y resultados).")
+    mysql: bool = Field(description="Conexión con la base original de envíos (solo lectura).")
 
 
 class HeartbeatRequest(BaseModel):
     model_config = ConfigDict(extra="allow")
-    node_id: str
-    state: str | None = None
-    agent_version: str | None = None
-    loaded_model: dict | None = None
-    slots_total: int = 0
-    slots_busy: int = 0
-    last_error: str | None = None
+    node_id: str = Field(description="Identificador único del nodo.")
+    state: str | None = Field(default=None, description="Estado del agente: starting, idle, loading, ready, busy, paused o error.")
+    agent_version: str | None = Field(default=None, description="Versión del agente que reporta el nodo.")
+    loaded_model: dict | None = Field(default=None, description="Modelo cargado: {id, sha256}. null si no hay ninguno.")
+    slots_total: int = Field(default=0, ge=0, description="Slots de inferencia que el agente tiene configurados.")
+    slots_busy: int = Field(default=0, ge=0, description="Slots ocupados en este momento.")
+    last_error: str | None = Field(default=None, description="Último error reportado por el nodo, si hay.")
 
 
 class DesiredModel(BaseModel):
-    id: str
-    filename: str
-    sha256: str
-    size_bytes: int
-    download_url: str
-    context_size: int
-    parallel: int
-    extra_args: list[str] = []
+    id: str = Field(description="Identificador del modelo que el nodo debe cargar.")
+    filename: str = Field(description="Nombre exacto del archivo que debe existir en models_dir.")
+    sha256: str = Field(description="SHA-256 esperado del archivo; el agente lo verifica.")
+    size_bytes: int = Field(description="Tamaño esperado en bytes.")
+    download_url: str = Field(description="URL absoluta de descarga; actualmente el link directo de Hugging Face.")
+    context_size: int = Field(description="Contexto por slot. El agente solicita context_size * parallel.")
+    parallel: int = Field(description="Slots de inferencia que debe abrir llamafile.")
+    extra_args: list[str] = Field(default_factory=list, description="Argumentos adicionales para llamafile.")
 
 
 class HeartbeatResponse(BaseModel):
-    desired_model: DesiredModel | None
-    paused: bool
-    heartbeat_interval_s: int
+    desired_model: DesiredModel | None = Field(description="Modelo que el nodo debe cargar; null para liberar la GPU.")
+    paused: bool = Field(description="Si es true, el nodo debe descargar el modelo y quedar idle.")
+    heartbeat_interval_s: int = Field(description="Segundos hasta el próximo heartbeat.")
 
 
 class ModeloStats(BaseModel):
-    modelo: str
-    enabled: bool
-    pending: int = 0
-    processing: int = 0
-    done: int = 0
-    dead: int = 0
+    modelo: str = Field(description="Identificador del modelo.")
+    enabled: bool = Field(description="Si el modelo está habilitado para recibir tareas.")
+    pending: int = Field(default=0, description="Tareas en espera.")
+    processing: int = Field(default=0, description="Tareas reclamadas por un nodo.")
+    done: int = Field(default=0, description="Tareas con resultado ok.")
+    dead: int = Field(default=0, description="Tareas que agotaron los reintentos.")
 
 
 class NodoStats(BaseModel):
-    node_id: str
-    state: str | None
-    agent_version: str | None
-    loaded_model: str | None
-    slots_total: int
-    slots_busy: int
-    last_error: str | None
-    last_seen: datetime | None
+    node_id: str = Field(description="Identificador del nodo.")
+    state: str | None = Field(description="Último estado reportado por el agente.")
+    agent_version: str | None = Field(description="Versión del agente.")
+    loaded_model: str | None = Field(description="Modelo que el nodo reporta cargado.")
+    slots_total: int = Field(description="Slots configurados.")
+    slots_busy: int = Field(description="Slots ocupados.")
+    last_error: str | None = Field(description="Último error reportado.")
+    last_seen: datetime | None = Field(description="Último heartbeat recibido.")
 
 
 class StatsResponse(BaseModel):
-    modelos: list[ModeloStats]
-    nodos: list[NodoStats]
+    modelos: list[ModeloStats] = Field(description="Estado de cada modelo registrado.")
+    nodos: list[NodoStats] = Field(description="Último estado conocido de cada nodo.")
 
 
-bearer = HTTPBearer(auto_error=False)
+bearer = HTTPBearer(
+    auto_error=False,
+    description="Token compartido del master. Enviar como `Authorization: Bearer <token>`.",
+)
 
 
 async def auth(
@@ -174,11 +177,42 @@ async def lifespan(app: FastAPI):
                     await poller
 
 
-app = FastAPI(title="Calificador LLM", lifespan=lifespan)
+tags_metadata = [
+    {"name": "Salud", "description": "Estado de las conexiones con Postgres y MySQL."},
+    {"name": "Nodos", "description": "Heartbeat y asignación del modelo que debe cargar cada nodo."},
+    {"name": "Modelos", "description": "Descarga y redirección de los archivos de modelos."},
+    {"name": "Tareas", "description": "Cola de calificación: reclamar tareas y entregar resultados."},
+    {"name": "Administración", "description": "Estado agregado de la cola y de los nodos."},
+]
+
+app = FastAPI(
+    title="Calificador LLM",
+    version="0.1.0",
+    description=(
+        "Master que entrega tareas de calificación a nodos con GPU, "
+        "asigna modelos y guarda los resultados en Postgres."
+    ),
+    lifespan=lifespan,
+    openapi_tags=tags_metadata,
+)
 
 
-@app.get("/api/v1/health", response_model=HealthResponse)
+@app.get(
+    "/api/v1/health",
+    response_model=HealthResponse,
+    tags=["Salud"],
+    summary="Estado de las conexiones",
+    response_description="Estado agregado y conectividad de cada base.",
+)
 async def health():
+    """
+    Entrada: ninguna.
+
+    Salida:
+    - `status`: `ok` si Postgres responde; `degraded` si no.
+    - `postgres`: conectividad con la base nueva.
+    - `mysql`: conectividad con la base original de envíos.
+    """
     estado = {"postgres": False, "mysql": False}
     try:
         await EnvioSnapshot.all().exists()
@@ -199,8 +233,22 @@ async def health():
     "/api/v1/heartbeat",
     response_model=HeartbeatResponse,
     dependencies=[Depends(auth)],
+    tags=["Nodos"],
+    summary="Heartbeat y asignación de modelo",
+    response_description="Modelo deseado, pausa e intervalo del próximo heartbeat.",
 )
 async def heartbeat(req: HeartbeatRequest):
+    """
+    Entrada:
+    - `node_id` (obligatorio): identificador del nodo.
+    - `state`, `agent_version`, `loaded_model`, `slots_total`, `slots_busy`, `last_error` (opcionales).
+
+    Salida:
+    - `desired_model`: `id`, `filename`, `sha256`, `size_bytes`, `download_url`, `context_size`, `parallel`, `extra_args`.
+    - `desired_model: null` si no hay trabajo o la sala está pausada.
+    - `paused`: si el nodo debe liberar la GPU.
+    - `heartbeat_interval_s`: segundos hasta el próximo latido.
+    """
     await NodoEstado.update_or_create(
         node_id=req.node_id,
         defaults={
@@ -233,8 +281,28 @@ async def heartbeat(req: HeartbeatRequest):
     )
 
 
-@app.get("/api/v1/models/{filename}", dependencies=[Depends(auth)])
-async def model_file(filename: str):
+@app.get(
+    "/api/v1/models/{filename}",
+    dependencies=[Depends(auth)],
+    tags=["Modelos"],
+    summary="Redirigir al archivo del modelo",
+    response_description="Redirección al archivo o 404 si el modelo no está registrado.",
+    responses={
+        307: {"description": "Redirección al archivo del modelo."},
+        404: {"description": "Modelo no registrado o deshabilitado."},
+    },
+)
+async def model_file(
+    filename: Annotated[
+        str,
+        Path(description="Nombre exacto del archivo, por ejemplo gpt-oss-20b-Q5_K_S.llamafile."),
+    ],
+):
+    """
+    Entrada: `filename` en la ruta.
+
+    Salida: `307` con la URL de Hugging Face; `404` si el modelo no existe o está deshabilitado.
+    """
     modelo = await Modelo.filter(filename=filename, enabled=True).first()
     if not modelo:
         raise HTTPException(status_code=404, detail="model not found")
@@ -242,8 +310,22 @@ async def model_file(filename: str):
     return RedirectResponse(modelo.download_url, status_code=307)
 
 
-@app.get("/api/v1/stats", response_model=StatsResponse, dependencies=[Depends(auth)])
+@app.get(
+    "/api/v1/stats",
+    response_model=StatsResponse,
+    dependencies=[Depends(auth)],
+    tags=["Administración"],
+    summary="Estado de la cola y de los nodos",
+    response_description="Resumen por modelo y por nodo.",
+)
 async def stats():
+    """
+    Entrada: ninguna.
+
+    Salida:
+    - `modelos`: `modelo`, `enabled`, `pending`, `processing`, `done`, `dead`.
+    - `nodos`: `node_id`, `state`, `agent_version`, `loaded_model`, `slots_total`, `slots_busy`, `last_error`, `last_seen`.
+    """
     filas = await (
         Calificacion.all()
         .group_by("modelo", "estado")
@@ -282,8 +364,27 @@ async def stats():
     return StatsResponse(modelos=resumen, nodos=nodos)
 
 
-@app.post("/api/v1/tasks/next", response_model=TaskResponse, dependencies=[Depends(auth)])
+@app.post(
+    "/api/v1/tasks/next",
+    response_model=TaskResponse,
+    dependencies=[Depends(auth)],
+    tags=["Tareas"],
+    summary="Reclamar la siguiente tarea",
+    response_description="Tarea con mensajes y esquema, o 204 sin trabajo.",
+    responses={
+        204: {"description": "No hay tareas pendientes para el modelo solicitado."},
+    },
+)
 async def next_task(req: TaskRequest, request: Request):
+    """
+    Entrada:
+    - `node_id`: nodo que pide trabajo.
+    - `model_id`: modelo cargado; el master solo entrega tareas de ese modelo.
+
+    Salida:
+    - `task_id`, `model_id`, `messages`, `params`, `response_schema`, `lease_seconds`.
+    - `204` sin cuerpo si no hay tareas.
+    """
     row = await claim(req.model_id, req.node_id, settings.lease_seconds)
     if row is None:
         return Response(status_code=204)
@@ -315,8 +416,31 @@ async def next_task(req: TaskRequest, request: Request):
     "/api/v1/tasks/{task_id}/result",
     response_model=ResultResponse,
     dependencies=[Depends(auth)],
+    tags=["Tareas"],
+    summary="Entregar el resultado de una tarea",
+    response_description="Resultado aceptado y si era duplicado.",
+    responses={
+        404: {"description": "task_id desconocido o tarea eliminada."},
+        422: {"description": "Payload inválido."},
+    },
 )
-async def task_result(task_id: str, payload: ResultRequest):
+async def task_result(
+    task_id: Annotated[
+        str,
+        Path(description="Identificador con formato envio:metrica:modelo."),
+    ],
+    payload: ResultRequest,
+):
+    """
+    Entrada:
+    - `task_id` en la ruta.
+    - Cuerpo: `node_id`, `status`, `output`, `raw_text`, `error`, `attempts`, `usage`, `model`, `started_at`, `finished_at`, `duration_s`.
+
+    Salida:
+    - `accepted`: true si se procesó.
+    - `duplicate`: true si ya existía un `ok` para esa tarea y modelo.
+    - `404` si el `task_id` no existe.
+    """
     try:
         duplicate = await complete(task_id, payload.model_dump(), settings.max_attempts)
     except TaskNotFound:

@@ -2,7 +2,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 Veredicto = Literal["SI", "NO", "NO_APLICA", "NO_DECIDIBLE"]
 Clase = Literal[
@@ -68,8 +68,8 @@ class PromptsFile(BaseModel):
 
 
 class Message(BaseModel):
-    role: str
-    content: str
+    role: str = Field(description="Rol del mensaje: user o assistant.")
+    content: str = Field(description="Contenido del mensaje enviado al modelo.")
 
 
 @lru_cache
