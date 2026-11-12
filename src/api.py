@@ -4,7 +4,6 @@ import logging
 from contextlib import asynccontextmanager, suppress
 from datetime import datetime, timezone
 from typing import Literal
-from urllib.parse import quote
 
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.responses import RedirectResponse
@@ -222,7 +221,7 @@ async def heartbeat(req: HeartbeatRequest):
             filename=modelo.filename,
             sha256=modelo.sha256,
             size_bytes=modelo.size_bytes,
-            download_url=f"/api/v1/models/{quote(modelo.filename)}",
+            download_url=modelo.download_url,
             context_size=modelo.context_size,
             parallel=modelo.parallel,
             extra_args=modelo.extra_args or [],

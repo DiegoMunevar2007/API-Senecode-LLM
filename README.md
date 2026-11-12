@@ -99,14 +99,14 @@ ON CONFLICT (clave) DO UPDATE SET valor = EXCLUDED.valor;
 -- reanudar: valor = 'false'
 ```
 
-El heartbeat devuelve `download_url = /api/v1/models/<archivo>` y el master hace
-un `307` al link de Hugging Face. El agente sigue el redirect sin cambios y
-`requests` quita el `Bearer` al cambiar de host, así el token no viaja a HF.
+El heartbeat devuelve el `download_url` directo de Hugging Face que está guardado
+en `modelo.download_url`. El endpoint `/api/v1/models/<archivo>` queda disponible
+como redirect alternativo.
 
 ## Endpoints
 
 - `POST /api/v1/heartbeat` — modelo deseado, pausa y `heartbeat_interval_s`.
-- `GET /api/v1/models/{filename}` — redirige al archivo del modelo.
+- `GET /api/v1/models/{filename}` — redirige al archivo del modelo (alternativo al link directo).
 - `GET /api/v1/stats` — pendientes/procesando/terminadas por modelo y último heartbeat por nodo.
 - `POST /api/v1/tasks/next` — `{node_id, model_id}`; `204` si no hay trabajo.
 - `POST /api/v1/tasks/{task_id}/result` — idempotente por modelo; el primer `ok` gana.
