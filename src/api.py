@@ -208,9 +208,9 @@ async def health():
     """
     Entrada: ninguna.
 
-    Salida:
+    Salida (`HealthResponse`):
     - `status`: `ok` si Postgres responde; `degraded` si no.
-    - `postgres`: conectividad con la base nueva.
+    - `postgres`: conectividad con la base nueva (cola y resultados).
     - `mysql`: conectividad con la base original de envíos.
     """
     estado = {"postgres": False, "mysql": False}
@@ -239,15 +239,20 @@ async def health():
 )
 async def heartbeat(req: HeartbeatRequest):
     """
-    Entrada:
-    - `node_id` (obligatorio): identificador del nodo.
-    - `state`, `agent_version`, `loaded_model`, `slots_total`, `slots_busy`, `last_error` (opcionales).
+    Entrada (`HeartbeatRequest`):
+    - `node_id`: identificador único del nodo.
+    - `state`: `starting`, `idle`, `loading`, `ready`, `busy`, `paused` o `error`.
+    - `agent_version`: versión del agente.
+    - `loaded_model`: `{id, sha256}` del modelo cargado, o `null`.
+    - `slots_total`, `slots_busy`: slots de inferencia configurados y ocupados.
+    - `last_error`: último error reportado por el nodo.
 
-    Salida:
-    - `desired_model`: `id`, `filename`, `sha256`, `size_bytes`, `download_url`, `context_size`, `parallel`, `extra_args`.
-    - `desired_model: null` si no hay trabajo o la sala está pausada.
-    - `paused`: si el nodo debe liberar la GPU.
-    - `heartbeat_interval_s`: segundos hasta el próximo latido.
+    Salida (`HeartbeatResponse`):
+    - `desired_model` (`DesiredModel` o `null`): `id`, `filename`, `sha256`,
+      `size_bytes`, `download_url` (link directo de Hugging Face), `context_size`,
+      `parallel`, `extra_args`.
+    - `paused`: `true` si el nodo debe descargar el modelo y liberar la GPU.
+    - `heartbeat_interval_s`: segundos hasta el próximo heartbeat.
     """
     await NodoEstado.update_or_create(
         node_id=req.node_id,
@@ -299,9 +304,12 @@ async def model_file(
     ],
 ):
     """
-    Entrada: `filename` en la ruta.
+    Entrada (path):
+    - `filename`: nombre exacto del archivo, por ejemplo `gpt-oss-20b-Q5_K_S.llamafile`.
 
-    Salida: `307` con la URL de Hugging Face; `404` si el modelo no existe o está deshabilitado.
+    Salida:
+    - `307`: redirección al link de Hugging Face guardado en `modelo.download_url`.
+    - `404`: el modelo no existe o está deshabilitado.
     """
     modelo = await Modelo.filter(filename=filename, enabled=True).first()
     if not modelo:
@@ -322,9 +330,11 @@ async def stats():
     """
     Entrada: ninguna.
 
-    Salida:
-    - `modelos`: `modelo`, `enabled`, `pending`, `processing`, `done`, `dead`.
-    - `nodos`: `node_id`, `state`, `agent_version`, `loaded_model`, `slots_total`, `slots_busy`, `last_error`, `last_seen`.
+    Salida (`StatsResponse`):
+    - `modelos` (`list[ModeloStats]`): `modelo`, `enabled`, `pending`, `processing`,
+      `done`, `dead`.
+    - `nodos` (`list[NodoStats]`): `node_id`, `state`, `agent_version`,
+      `loaded_model`, `slots_total`, `slots_busy`, `last_error`, `last_seen`.
     """
     filas = await (
         Calificacion.all()
@@ -377,13 +387,19 @@ async def stats():
 )
 async def next_task(req: TaskRequest, request: Request):
     """
-    Entrada:
+    Entrada (`TaskRequest`):
     - `node_id`: nodo que pide trabajo.
     - `model_id`: modelo cargado; el master solo entrega tareas de ese modelo.
 
-    Salida:
-    - `task_id`, `model_id`, `messages`, `params`, `response_schema`, `lease_seconds`.
-    - `204` sin cuerpo si no hay tareas.
+    Salida 200 (`TaskResponse`):
+    - `task_id`: identificador con formato `envio:metrica:modelo`.
+    - `model_id`: modelo con el que se debe calificar.
+    - `messages` (`list[Message]`): `role` y `content` para el chat.
+    - `params` (`TaskParams`): `temperature`, `seed`, `max_tokens`.
+    - `response_schema`: JSON Schema para forzar y validar la salida.
+    - `lease_seconds`: segundos de lease de la tarea.
+
+    Salida 204: sin cuerpo; no hay tareas pendientes para ese modelo.
     """
     row = await claim(req.model_id, req.node_id, settings.lease_seconds)
     if row is None:
@@ -432,14 +448,25 @@ async def task_result(
     payload: ResultRequest,
 ):
     """
-    Entrada:
-    - `task_id` en la ruta.
-    - Cuerpo: `node_id`, `status`, `output`, `raw_text`, `error`, `attempts`, `usage`, `model`, `started_at`, `finished_at`, `duration_s`.
+    Entrada (path):
+    - `task_id`: identificador con formato `envio:metrica:modelo`.
 
-    Salida:
-    - `accepted`: true si se procesó.
-    - `duplicate`: true si ya existía un `ok` para esa tarea y modelo.
-    - `404` si el `task_id` no existe.
+    Entrada (`ResultRequest`):
+    - `node_id`: nodo que entrega el resultado.
+    - `status`: `ok` si la calificación fue válida; `error` si falló.
+    - `output`: JSON validado contra `response_schema`; obligatorio si `status=ok`.
+    - `raw_text`: texto crudo del modelo.
+    - `error`: descripción del error si `status=error`.
+    - `attempts`: intentos de inferencia del agente.
+    - `usage`: conteo de tokens del servidor de inferencia.
+    - `model` (`ModelInfo`): `id` y `sha256` del modelo usado.
+    - `started_at`, `finished_at`, `duration_s`: tiempos de la inferencia.
+
+    Salida 200 (`ResultResponse`):
+    - `accepted`: `true` si se procesó.
+    - `duplicate`: `true` si ya existía un `ok` para esa tarea y modelo.
+
+    Salida 404: `task_id` desconocido. Salida 422: payload inválido.
     """
     try:
         duplicate = await complete(task_id, payload.model_dump(), settings.max_attempts)
